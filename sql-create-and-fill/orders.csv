@@ -1,0 +1,6 @@
+id_order,id_customer,id,total,completion_date,completeness
+1,5,2,500000,2025-03-15,True
+2,3,5,1000000,2025-03-20,True
+3,1,4,700000,,False
+4,4,3,600000,2025-03-18,True
+5,2,1,750000,,False
