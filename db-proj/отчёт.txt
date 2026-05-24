@@ -1,0 +1,177 @@
+
+Схема базы данных и запросы
+
+-- 1. СХЕМА БАЗЫ ДАННЫХ
+
+
+-- Включение поддержки внешних ключей
+PRAGMA foreign_keys = ON;
+
+-- Таблица должностей
+CREATE TABLE IF NOT EXISTS jobs_titles (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+-- Таблица сотрудников (кассиров)
+CREATE TABLE IF NOT EXISTS emploees (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    surnaame TEXT NOT NULL,
+    id_job_title INTEGER NOT NULL,
+    FOREIGN KEY (id_job_title) REFERENCES jobs_titles(id)
+);
+
+-- Таблица категорий товаров
+CREATE TABLE IF NOT EXISTS categories (
+    id_category INTEGER PRIMARY KEY,
+    name_category TEXT NOT NULL UNIQUE
+);
+
+-- Таблица товаров
+CREATE TABLE IF NOT EXISTS producrs (
+    id_product INTEGER PRIMARY KEY,
+    name_of_product TEXT NOT NULL,
+    price REAL NOT NULL,
+    id_category INTEGER NOT NULL,
+    quantity_at_storage REAL NOT NULL,
+    FOREIGN KEY (id_category) REFERENCES categories(id_category)
+);
+
+-- Таблица чеков (продаж)
+CREATE TABLE IF NOT EXISTS reseipts (
+    id_check INTEGER PRIMARY KEY,
+    created_at REAL NOT NULL,
+    id_cashier INTEGER NOT NULL,
+    FOREIGN KEY (id_cashier) REFERENCES emploees(id)
+);
+
+-- Таблица проданных позиций
+CREATE TABLE IF NOT EXISTS sale_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_check INTEGER NOT NULL,
+    id_product INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    price_at_sale REAL NOT NULL,
+    FOREIGN KEY (id_check) REFERENCES reseipts(id_check),
+    FOREIGN KEY (id_product) REFERENCES producrs(id_product)
+);
+
+-- Добавление начальной должности
+INSERT OR IGNORE INTO jobs_titles (name) VALUES ('Кассир');
+
+
+-- 2. ЗАПРОСЫ
+
+
+-- 2.1. Получение информации о товаре по ID
+-- Используется в: get_product_info()
+
+SELECT name_of_product, price, quantity_at_storage 
+FROM producrs 
+WHERE id_product = ?;
+
+-- 2.2. Проверка остатка товара перед продажей
+-- Используется в: finalize_sale()
+
+SELECT quantity_at_storage, name_of_product 
+FROM producrs 
+WHERE id_product = ?;
+
+-- 2.3. Создание нового чека
+-- Используется в: finalize_sale()
+
+INSERT INTO reseipts (created_at, id_cashier) 
+VALUES (?, ?);
+
+-- 2.4. Добавление позиции в чек
+-- Используется в: finalize_sale()
+
+INSERT INTO sale_items (id_check, id_product, quantity, price_at_sale) 
+VALUES (?, ?, ?, ?);
+
+-- 2.5. Списание товара со склада
+-- Используется в: finalize_sale()
+
+UPDATE producrs 
+SET quantity_at_storage = quantity_at_storage - ? 
+WHERE id_product = ?;
+
+-- 2.6. Отчёт о продажах за конкретную дату
+-- Используется в: get_report(), _display_report()
+
+SELECT 
+    p.name_of_product, 
+    SUM(si.quantity), 
+    SUM(si.quantity * si.price_at_sale)
+FROM sale_items si
+JOIN producrs p ON si.id_product = p.id_product
+JOIN reseipts r ON si.id_check = r.id_check
+WHERE DATE(r.created_at, 'unixepoch') = ?
+GROUP BY p.id_product
+ORDER BY p.name_of_product;
+
+-- 2.7. Получение списка кассиров для выпадающего списка
+-- Используется в: refresh_cashier_list()
+
+SELECT e.id, e.name, e.surnaame, j.name
+FROM emploees e 
+JOIN jobs_titles j ON e.id_job_title = j.id;
+
+-- 2.8. Получение всех категорий товаров
+-- Используется в: refresh_categories()
+
+SELECT id_category, name_category 
+FROM categories 
+ORDER BY name_category;
+
+-- 2.9. Получение товаров выбранной категории
+-- Используется в: on_category_selected()
+
+SELECT id_product, name_of_product, quantity_at_storage 
+FROM producrs 
+WHERE id_category = ?;
+
+-- 2.10. Поиск категории по имени (при загрузке из CSV)
+-- Используется в: _load_products_from_file()
+
+SELECT id_category FROM categories WHERE name_category = ?;
+
+-- 2.11. Создание новой категории (при загрузке из CSV)
+-- Используется в: _load_products_from_file()
+
+INSERT INTO categories (name_category) VALUES (?);
+
+-- 2.12. Поиск существующего товара по имени (при загрузке из CSV)
+-- Используется в: _load_products_from_file()
+
+SELECT id_product, quantity_at_storage FROM producrs WHERE name_of_product = ?;
+
+-- 2.13. Обновление существующего товара (при загрузке из CSV)
+-- Используется в: _load_products_from_file()
+
+UPDATE producrs 
+SET price = ?, id_category = ?, quantity_at_storage = ? 
+WHERE id_product = ?;
+
+-- 2.14. Вставка нового товара (при загрузке из CSV)
+-- Используется в: _load_products_from_file()
+
+INSERT INTO producrs (name_of_product, price, id_category, quantity_at_storage) 
+VALUES (?, ?, ?, ?);
+
+-- 2.15. Получение ID должности 'Кассир' (при загрузке кассиров)
+-- Используется в: auto_load_cashiers()
+
+SELECT id FROM jobs_titles WHERE name = 'Кассир';
+
+-- 2.16. Проверка существования кассира (при загрузке из CSV)
+-- Используется в: auto_load_cashiers()
+
+SELECT id FROM emploees WHERE name = ? AND surnaame = ?;
+
+-- 2.17. Добавление нового кассира (при загрузке из CSV)
+-- Используется в: auto_load_cashiers()
+
+INSERT INTO emploees (name, surnaame, id_job_title) 
+VALUES (?, ?, ?);
