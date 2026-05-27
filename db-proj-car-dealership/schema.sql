@@ -1,5 +1,30 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS steering_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS fuel_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS transmissions (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS drives (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS conditions (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS job_titles (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
@@ -36,15 +61,20 @@ CREATE TABLE IF NOT EXISTS cars (
     price REAL NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     id_category INTEGER NOT NULL,
-    steering TEXT NOT NULL DEFAULT 'left',       
-    power INTEGER NOT NULL,         
-    engine_volume REAL,       
-    fuel_type TEXT,         
-    transmission TEXT,    
-    drive TEXT,  
-    condition TEXT DEFAULT 'new',  
-    mileage INTEGER, 
-    FOREIGN KEY (id_category) REFERENCES car_categories(id)
+    id_steering INTEGER NOT NULL,
+    power INTEGER NOT NULL,
+    engine_volume REAL,
+    id_fuel_type INTEGER,
+    id_transmission INTEGER,
+    id_drive INTEGER,
+    id_condition INTEGER NOT NULL DEFAULT 1,
+    mileage INTEGER,
+    FOREIGN KEY (id_category) REFERENCES car_categories(id),
+    FOREIGN KEY (id_steering) REFERENCES steering_types(id),
+    FOREIGN KEY (id_fuel_type) REFERENCES fuel_types(id),
+    FOREIGN KEY (id_transmission) REFERENCES transmissions(id),
+    FOREIGN KEY (id_drive) REFERENCES drives(id),
+    FOREIGN KEY (id_condition) REFERENCES conditions(id)
 );
 
 CREATE TABLE IF NOT EXISTS sales (

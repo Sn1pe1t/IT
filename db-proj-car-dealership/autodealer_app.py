@@ -23,7 +23,7 @@ def init_db():
         conn.close()
         raise SystemExit
 
-    # Удаляем старый триггер, если он остался от предыдущих версий
+    # Удаляем старый триггер, если он остался (на всякий случай)
     conn.execute("DROP TRIGGER IF EXISTS deduct_quantity")
 
     cur = conn.cursor()
@@ -37,14 +37,18 @@ def init_db():
     return conn
 
 def load_initial_data(conn, csv_file):
-    """Читает CSV-файл без заголовка и вставляет данные в соответствующие таблицы."""
     table_columns = {
+        'steering_types': ['id', 'name'],
+        'fuel_types': ['id', 'name'],
+        'transmissions': ['id', 'name'],
+        'drives': ['id', 'name'],
+        'conditions': ['id', 'name'],
         'job_titles': ['id', 'name'],
         'employees': ['id', 'name', 'surname', 'id_job_title'],
         'customers': ['id', 'first_name', 'last_name', 'phone', 'email'],
         'car_categories': ['id', 'name'],
         'cars': ['id', 'brand', 'model', 'year', 'color', 'vin', 'price', 'quantity', 'id_category',
-                 'steering', 'power', 'engine_volume', 'fuel_type', 'transmission', 'drive', 'condition', 'mileage']
+                 'id_steering', 'power', 'engine_volume', 'id_fuel_type', 'id_transmission', 'id_drive', 'id_condition', 'mileage']
     }
 
     with open(csv_file, 'r', encoding='utf-8') as f:
@@ -57,11 +61,15 @@ def load_initial_data(conn, csv_file):
             if table not in table_columns:
                 continue
             cols = table_columns[table]
+            # Для cars: преобразуем пустой mileage в None
             if table == 'cars' and len(values) >= len(cols):
                 if values[-1] == '' or values[-1] is None:
                     values[-1] = None
                 else:
-                    values[-1] = int(values[-1])
+                    try:
+                        values[-1] = int(values[-1])
+                    except:
+                        values[-1] = None
             if len(values) != len(cols):
                 print(f"Пропущена строка для {table}: ожидалось {len(cols)} значений, получено {len(values)}")
                 continue
@@ -74,10 +82,18 @@ def load_initial_data(conn, csv_file):
     conn.commit()
 
 def get_car_info(conn, car_id):
-    row = conn.execute(
-        "SELECT brand, model, year, color, price, quantity, steering, power, engine_volume, "
-        "fuel_type, transmission, drive, condition, mileage FROM cars WHERE id = ?", (car_id,)
-    ).fetchone()
+    row = conn.execute("""
+        SELECT c.brand, c.model, c.year, c.color, c.price, c.quantity,
+               st.name, c.power, c.engine_volume,
+               ft.name, t.name, d.name, cond.name, c.mileage
+        FROM cars c
+        LEFT JOIN steering_types st ON c.id_steering = st.id
+        LEFT JOIN fuel_types ft ON c.id_fuel_type = ft.id
+        LEFT JOIN transmissions t ON c.id_transmission = t.id
+        LEFT JOIN drives d ON c.id_drive = d.id
+        LEFT JOIN conditions cond ON c.id_condition = cond.id
+        WHERE c.id = ?
+    """, (car_id,)).fetchone()
     if row:
         info = {
             "description": f"{row[0]} {row[1]}",
@@ -88,10 +104,10 @@ def get_car_info(conn, car_id):
             "steering": "Левый" if row[6] == 'left' else "Правый",
             "power": row[7],
             "engine_volume": row[8],
-            "fuel_type": row[9],
-            "transmission": row[10],
-            "drive": row[11],
-            "condition": "Новый" if row[12] == 'new' else "С пробегом",
+            "fuel_type": row[9] or "",
+            "transmission": row[10] or "",
+            "drive": row[11] or "",
+            "condition": "Новый" if row[12] == 'new' else "С пробегом" if row[12] == 'used' else row[12],
             "mileage": row[13],
             "in_stock": row[5] > 0
         }
@@ -177,15 +193,19 @@ def get_sales_list(conn, limit=50):
     ''', (limit,)).fetchall()
 
 def get_sale_details(conn, sale_id):
-    return conn.execute('''
-        SELECT ca.brand, ca.model, ca.year, ca.engine_volume, ca.fuel_type, ca.transmission, ca.drive,
+    return conn.execute("""
+        SELECT ca.brand, ca.model, ca.year, ca.engine_volume,
+               ft.name, t.name, d.name,
                sd.quantity, sd.price_at_sale,
                (sd.quantity * sd.price_at_sale) AS subtotal,
                sd.id_car, sd.in_stock_at_sale
         FROM sale_details sd
         JOIN cars ca ON sd.id_car = ca.id
+        LEFT JOIN fuel_types ft ON ca.id_fuel_type = ft.id
+        LEFT JOIN transmissions t ON ca.id_transmission = t.id
+        LEFT JOIN drives d ON ca.id_drive = d.id
         WHERE sd.id_sale = ?
-    ''', (sale_id,)).fetchall()
+    """, (sale_id,)).fetchall()
 
 
 class AutoDealerApp:
@@ -596,93 +616,81 @@ class AutoDealerApp:
             self.cars = {}
 
     def update_car_list(self, _event=None):
-        """Обновляет список автомобилей с учётом всех фильтров и показывает остатки."""
         cid = self.cat_map.get(self.cat_var.get()) if self.cat_var.get() else None
         conditions = []
         params = []
 
-        # Фильтр по категории
         if cid:
-            conditions.append("id_category = ?")
+            conditions.append("c.id_category = ?")
             params.append(cid)
-
-        # Наличие
         if self.in_stock_var.get():
-            conditions.append("quantity > 0")
+            conditions.append("c.quantity > 0")
 
-        # Руль
         steering = self.steering_var.get()
         if steering == 'Левый':
-            conditions.append("steering = 'left'")
+            conditions.append("st.name = 'left'")
         elif steering == 'Правый':
-            conditions.append("steering = 'right'")
+            conditions.append("st.name = 'right'")
 
-        # Мощность
         power_from = self.power_from_var.get().strip()
         power_to = self.power_to_var.get().strip()
         if power_from:
             try:
-                p_from = int(power_from)
-                conditions.append("power >= ?")
-                params.append(p_from)
-            except ValueError:
-                pass
+                conditions.append("c.power >= ?")
+                params.append(int(power_from))
+            except: pass
         if power_to:
             try:
-                p_to = int(power_to)
-                conditions.append("power <= ?")
-                params.append(p_to)
-            except ValueError:
-                pass
+                conditions.append("c.power <= ?")
+                params.append(int(power_to))
+            except: pass
 
-        # Топливо
         fuel = self.fuel_var.get()
-        fuel_map = {'Бензин': 'petrol', 'Дизель': 'diesel', 'Гибрид': 'hybrid', 'Электро': 'electric'}
+        fuel_map = {'Бензин':'petrol','Дизель':'diesel','Гибрид':'hybrid','Электро':'electric'}
         if fuel in fuel_map:
-            conditions.append("fuel_type = ?")
+            conditions.append("ft.name = ?")
             params.append(fuel_map[fuel])
 
-        # КПП
         trans = self.transmission_var.get()
-        trans_map = {'Механика': 'manual', 'Автомат': 'automatic', 'Робот': 'robot', 'Вариатор': 'variator'}
+        trans_map = {'Механика':'manual','Автомат':'automatic','Робот':'robot','Вариатор':'variator'}
         if trans in trans_map:
-            conditions.append("transmission = ?")
+            conditions.append("tr.name = ?")
             params.append(trans_map[trans])
 
-        # Привод
         drive = self.drive_var.get()
-        drive_map = {'Передний': 'front', 'Задний': 'rear', 'Полный': 'all'}
+        drive_map = {'Передний':'front','Задний':'rear','Полный':'all'}
         if drive in drive_map:
-            conditions.append("drive = ?")
+            conditions.append("d.name = ?")
             params.append(drive_map[drive])
 
-        # Состояние
         cond = self.condition_var.get()
-        cond_map = {'Новый': 'new', 'С пробегом': 'used'}
+        cond_map = {'Новый':'new','С пробегом':'used'}
         if cond in cond_map:
-            conditions.append("condition = ?")
+            conditions.append("cond.name = ?")
             params.append(cond_map[cond])
 
-        query = "SELECT id, brand, model, year, price, quantity FROM cars"
+        query = """
+            SELECT c.id, c.brand, c.model, c.year, c.price, c.quantity
+            FROM cars c
+            LEFT JOIN steering_types st ON c.id_steering = st.id
+            LEFT JOIN fuel_types ft ON c.id_fuel_type = ft.id
+            LEFT JOIN transmissions tr ON c.id_transmission = tr.id
+            LEFT JOIN drives d ON c.id_drive = d.id
+            LEFT JOIN conditions cond ON c.id_condition = cond.id
+        """
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY quantity DESC, brand ASC"
+        query += " ORDER BY c.quantity DESC, c.brand ASC"
 
         rows = self.conn.execute(query, params).fetchall()
         self.cars = {}
         for row in rows:
             car_id, brand, model, year, price, stock = row
-            if stock > 0:
-                stock_text = f"В наличии: {stock} шт."
-            else:
-                stock_text = "Нет в наличии"
+            stock_text = f"В наличии: {stock} шт." if stock > 0 else "Нет в наличии"
             label = f"{brand} {model} ({year}) — {price:,.0f} руб. [{stock_text}]"
             self.cars[label] = car_id
-
         self.car_combo['values'] = list(self.cars.keys())
-        # Счётчик найденных автомобилей
         self.car_count_label.config(text=f"Найдено автомобилей: {len(self.cars)}")
-
         if self.cars:
             self.car_combo.current(0)
             self._on_car_selected()
@@ -829,45 +837,57 @@ class AutoDealerApp:
                         price = float(row['price'])
                         qty = int(row['quantity'])
                         cat_name = row['category'].strip()
-                        steering = row.get('steering', 'left').strip().lower()
+                        steering_text = row.get('steering', 'left').strip().lower()
                         power = int(row['power'])
                         engine_volume = float(row['engine_volume']) if row.get('engine_volume') else None
-                        fuel_type = row.get('fuel_type', '').strip().lower()
-                        transmission = row.get('transmission', '').strip().lower()
-                        drive = row.get('drive', '').strip().lower()
-                        condition = row.get('condition', 'new').strip().lower()
+                        fuel_text = row.get('fuel_type', '').strip().lower()
+                        trans_text = row.get('transmission', '').strip().lower()
+                        drive_text = row.get('drive', '').strip().lower()
+                        cond_text = row.get('condition', 'new').strip().lower()
                         mileage = int(row['mileage']) if row.get('mileage') and row['mileage'].strip() else None
                     except (KeyError, ValueError) as e:
                         continue
 
-                    cat_row = cur.execute(
-                        "SELECT id FROM car_categories WHERE name = ?", (cat_name,)
-                    ).fetchone()
+                    # Получаем id категории
+                    cat_row = cur.execute("SELECT id FROM car_categories WHERE name = ?", (cat_name,)).fetchone()
                     if cat_row:
                         cat_id = cat_row[0]
                     else:
                         cur.execute("INSERT INTO car_categories (name) VALUES (?)", (cat_name,))
                         cat_id = cur.lastrowid
 
-                    exist = cur.execute(
-                        "SELECT id, quantity FROM cars WHERE vin = ?", (vin,)
-                    ).fetchone()
+                    # Функция для получения id из справочника
+                    def get_ref_id(table, name):
+                        if not name:
+                            return None
+                        r = cur.execute(f"SELECT id FROM {table} WHERE name = ?", (name,)).fetchone()
+                        if r:
+                            return r[0]
+                        # Если нет – вставляем (хотя обычно справочники уже заполнены)
+                        cur.execute(f"INSERT INTO {table} (name) VALUES (?)", (name,))
+                        return cur.lastrowid
+
+                    id_steering = get_ref_id('steering_types', steering_text)
+                    id_fuel = get_ref_id('fuel_types', fuel_text) if fuel_text else None
+                    id_trans = get_ref_id('transmissions', trans_text) if trans_text else None
+                    id_drive = get_ref_id('drives', drive_text) if drive_text else None
+                    id_cond = get_ref_id('conditions', cond_text)
+
+                    exist = cur.execute("SELECT id, quantity FROM cars WHERE vin = ?", (vin,)).fetchone()
                     if exist:
-                        cur.execute(
-                            "UPDATE cars SET price=?, quantity=quantity+?, id_category=?, steering=?, "
-                            "power=?, engine_volume=?, fuel_type=?, transmission=?, drive=?, "
-                            "condition=?, mileage=? WHERE id=?",
-                            (price, qty, cat_id, steering, power, engine_volume, fuel_type,
-                             transmission, drive, condition, mileage, exist[0])
-                        )
+                        cur.execute("""
+                            UPDATE cars SET price=?, quantity=quantity+?, id_category=?, id_steering=?,
+                            power=?, engine_volume=?, id_fuel_type=?, id_transmission=?, id_drive=?,
+                            id_condition=?, mileage=? WHERE id=?
+                        """, (price, qty, cat_id, id_steering, power, engine_volume,
+                            id_fuel, id_trans, id_drive, id_cond, mileage, exist[0]))
                     else:
-                        cur.execute(
-                            "INSERT INTO cars (brand, model, year, color, vin, price, quantity, id_category, "
-                            "steering, power, engine_volume, fuel_type, transmission, drive, condition, mileage) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (brand, model, year, color, vin, price, qty, cat_id,
-                             steering, power, engine_volume, fuel_type, transmission, drive, condition, mileage)
-                        )
+                        cur.execute("""
+                            INSERT INTO cars (brand, model, year, color, vin, price, quantity, id_category,
+                            id_steering, power, engine_volume, id_fuel_type, id_transmission, id_drive, id_condition, mileage)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        """, (brand, model, year, color, vin, price, qty, cat_id,
+                            id_steering, power, engine_volume, id_fuel, id_trans, id_drive, id_cond, mileage))
             self.conn.commit()
             messagebox.showinfo("Успех", "Автомобили загружены из CSV.")
             self.refresh_categories()
